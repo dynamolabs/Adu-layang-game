@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#9CC3C9">
+<title>Adu Layang</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Karla:wght@500;700;800&family=Shrikhand&display=swap">
+<style>
+  :root { --bg: #9CC3C9; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; touch-action: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  #game { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); box-sizing: border-box; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="game"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
+<script>
+'use strict';
+// Adu Layang v1.2 - Studio Aigame. Arah seni "Sore di kampung": kertas potong, 6 warna, garis tinta seragam. Lihat DESIGN.md.
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const rnd = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[(Math.random() * a.length) | 0];
+
+// palet (hanya ini)
+const INK = 0x1f4e5a, PAPER = 0xf3e3c3, SKY = 0x9cc3c9, SKY2 = 0xc9dcd2, ORANGE = 0xe8803a, BRICK = 0xb5442c;
+const CSS = { ink: '#1F4E5A', paper: '#F3E3C3', sky: '#9CC3C9', sky2: '#C9DCD2', orange: '#E8803A', brick: '#B5442C' };
+const LOGO = 'Shrikhand, "Arial Black", Georgia, serif';
+const BODY = 'Karla, "Trebuchet MS", Arial, sans-serif';
+const LINE = 2;
+// Tajam di layar HP: kanvas digambar sebanyak piksel asli layar (devicePixelRatio), kamera memperbesar dunia 450 px.
+const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+const _addText = Phaser.GameObjects.GameObjectFactory.prototype.text;
+Phaser.GameObjects.GameObjectFactory.prototype.text = function (x, y, t, style) { return _addText.call(this, x, y, t, { resolution: DPR, ...style }); };
+const hdCamera = scene => { scene.cameras.main.setZoom(DPR).centerOn(W / 2, H / 2); };
+
+const W = 450;
+// Tinggi layar logika ikut bentuk layar HP supaya tidak ada pita hitam.
+const H = (() => { const el = document.getElementById('game'); const w = el.clientWidth || innerWidth, h = el.clientHeight || innerHeight;
+  return Math.round(clamp(W * h / Math.max(1, w), 800, 980)); })();
+const GY = H - 800;
+const ANCHOR = { x: 231, y: 676 + GY };
+const OPP_ANCHORS = [{ x: 38, y: 694 + GY }, { x: 412, y: 694 + GY }];
+const POLES = [-40, 130, 320, 490];
+const TOP_Y = 92;
+const LOW_Y = 540 + GY;
+const FLAG = { x: 268, y: 628 + GY }; // ujung bambu umbul-umbul di atap pemain
+
+const T = { // angka keseimbangan, lihat DESIGN.md
+  lift: 390, tug: 520, tugDecay: 4, sink: 180, maxUp: 280, maxDown: 115, steer: 3.2, steerMax: 260, windHold: 0.35, windSlack: 1.6,
+  cutRate: 1.3, regen: 0.12, oppRegen: 0.1, comboWin: 8,
+};
+const TYPES = {
+  pelan:  { speed: 70,  pull: 0.25, pullCross: 0.3,  str: 0.9,  hp: 1,    top: ORANGE, bot: PAPER },
+  cepat:  { speed: 125, pull: 0.4,  pullCross: 0.5,  str: 1.0,  hp: 1.25, top: SKY2,   bot: INK },
+  jagoan: { speed: 105, pull: 0.45, pullCross: 0.85, str: 1.15, hp: 1.6,  top: INK,    bot: ORANGE },
+};
+// sudut layangan sedikit tak rata, seperti digunting tangan (tetap, tidak bergetar)
+const KITE = [[0.6, -27], [18.5, -6.5], [-0.4, 20], [-17.6, -5.6]];
+
+function wireY(x, i) {
+  const base = (i === 0 ? 606 : 621) + GY;
+  for (let k = 0; k < POLES.length - 1; k++) {
+    if (x >= POLES[k] && x <= POLES[k + 1]) return base + 15 * Math.sin(Math.PI * (x - POLES[k]) / (POLES[k + 1] - POLES[k]));
+  }
+  return base;
+}
+function segX(a, b, c, d) {
+  const r1x = b.x - a.x, r1y = b.y - a.y, r2x = d.x - c.x, r2y = d.y - c.y;
+  const den = r1x * r2y - r1y * r2x;
+  if (Math.abs(den) < 1e-6) return null;
+  const t = ((c.x - a.x) * r2y - (c.y - a.y) * r2x) / den;
+  const u = ((c.x - a.x) * r1y - (c.y - a.y) * r1x) / den;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return { x: a.x + t * r1x, y: a.y + t * r1y };
+}
+function polyX(p, q) {
+  for (let i = 2; i < p.length - 1; i++) for (let j = 2; j < q.length - 1; j++) {
+    const r = segX(p[i], p[i + 1], q[j], q[j + 1]); if (r) return r;
+  }
+  return null;
+}
+function stringPts(a, k, slack, wind, n = 12) {
+  const dx = k.x - a.x, dy = k.y - a.y, d = Math.hypot(dx, dy);
+  const s = d * (0.05 + 0.13 * slack);
+  const cx = (a.x + k.x) / 2 + wind * 0.016 * s, cy = (a.y + k.y) / 2 + s;
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, u = 1 - t;
+    pts.push({ x: u * u * a.x + 2 * u * t * cx + t * t * k.x, y: u * u * a.y + 2 * u * t * cy + t * t * k.y });
+  }
+  return pts;
+}
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('aduLayang.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('aduLayang.' + k, JSON.stringify(v)); } catch (e) {} },
+};
+const buzz = ms => { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} };
+const lerpColor = (a, b, t) => { const ar = a >> 16, ag = (a >> 8) & 255, ab = a & 255, br = b >> 16, bg = (b >> 8) & 255, bb = b & 255;
+  return (Math.round(ar + (br - ar) * t) << 16) | (Math.round(ag + (bg - ag) * t) << 8) | Math.round(ab + (bb - ab) * t); };
+
+// ---------- Suara: jarang dan bermakna ----------
+const SFX = {
+  ctx: null, master: null, muted: store.get('mute', false), noise: null, wind: null, rasp: null,
+  pent: [293.66, 334.8, 384.7, 440.5, 508, 587.3, 669.6, 769.4], // slendro kira-kira
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended' && !document.hidden) this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    const c = this.ctx = new AC();
+    this.master = c.createGain(); this.master.gain.value = this.muted ? 0 : 0.8; this.master.connect(c.destination);
+    const buf = c.createBuffer(1, c.sampleRate * 2, c.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    this.noise = buf;
+    this.wind = this.loopNoise('lowpass', 380, 0.6);
+    this.rasp = this.loopNoise('bandpass', 3200, 6);
+  },
+  loopNoise(type, f, q) {
+    const c = this.ctx, src = c.createBufferSource(); src.buffer = this.noise; src.loop = true;
+    const fl = c.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = q;
+    const g = c.createGain(); g.gain.value = 0;
+    src.connect(fl); fl.connect(g); g.connect(this.master); src.start();
+    return { g, fl };
+  },
+  level(node, v) { if (node && this.ctx) node.g.gain.setTargetAtTime(v, this.ctx.currentTime, 0.1); },
+  setMute(m) { this.muted = m; store.set('mute', m); if (this.master) this.master.gain.value = m ? 0 : 0.8; },
+  burst(f, dur, vol, type = 'highpass', delay = 0) {
+    const c = this.ctx; if (!c) return;
+    const s = c.createBufferSource(); s.buffer = this.noise;
+    const fl = c.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = 2;
+    const g = c.createGain(), t = c.currentTime + delay; g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    s.connect(fl); fl.connect(g); g.connect(this.master); s.start(t, rnd(0, 1)); s.stop(t + dur + 0.03);
+  },
+  bonang(f, delay = 0, vol = 0.12, decay = 0.9) { // logam: nada dasar + parsial tak harmonis
+    const c = this.ctx; if (!c) return;
+    const t = c.currentTime + delay;
+    [[f, vol, decay], [f * 2.76, vol * 0.3, decay * 0.25], [f * 5.4, vol * 0.08, decay * 0.1]].forEach(([fr, v, dc]) => {
+      const o = c.createOscillator(), g = c.createGain(); o.type = 'sine'; o.frequency.value = fr;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(v, t + 0.006); g.gain.exponentialRampToValueAtTime(0.0001, t + dc);
+      o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dc + 0.05);
+    });
+  },
+  gong() { this.bonang(73.4, 0, 0.2, 3); },
+  reel() { for (let i = 0; i < 3; i++) this.burst(2400, 0.025, 0.12, 'bandpass', i * 0.045); }, // "srek" gulungan
+  cut(combo) { this.burst(1800, 0.08, 0.35); const s = Math.min(combo, 3) - 1; [0, 2, 4].forEach((n, i) => this.bonang(this.pent[n + s], 0.05 + i * 0.12)); },
+  windShift(dir) { this.bonang(this.pent[dir > 0 ? 3 : 1], 0, 0.05, 1.2); this.bonang(this.pent[dir > 0 ? 5 : 0], 0.3, 0.04, 1.4); },
+  bird() { const c = this.ctx; if (!c) return; [0, 0.09].forEach(d => { const o = c.createOscillator(), g = c.createGain(), t = c.currentTime + d;
+    o.type = 'sine'; o.frequency.setValueAtTime(2600, t); o.frequency.exponentialRampToValueAtTime(3500, t + 0.06);
+    g.gain.setValueAtTime(0.04, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07); o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.08); }); },
+  lose() { this.burst(1500, 0.1, 0.4); [4, 2, 0].forEach((n, i) => this.bonang(this.pent[n] / 2, 0.25 + i * 0.28, 0.13, 1.4)); },
+  tap() { this.bonang(this.pent[4], 0, 0.05, 0.3); },
+};
+document.addEventListener('visibilitychange', () => { if (SFX.ctx) { if (document.hidden) SFX.ctx.suspend(); else SFX.ctx.resume(); } });
+
+// ---------- Gambar ----------
+function kitePts(x, y, ang, s) {
+  const ca = Math.cos(ang), sa = Math.sin(ang);
+  return KITE.map(([px, py]) => ({ x: x + (px * ca - py * sa) * s, y: y + (px * sa + py * ca) * s }));
+}
+function drawKite(g, x, y, ang, s, top, bot, alpha = 1) {
+  const [t, r, b, l] = kitePts(x, y, ang, s);
+  g.fillStyle(top, alpha); g.fillTriangle(t.x, t.y, r.x, r.y, l.x, l.y);
+  g.fillStyle(bot, alpha); g.fillTriangle(l.x, l.y, r.x, r.y, b.x, b.y);
+  g.lineStyle(LINE, INK, alpha); g.strokePoints([t, r, b, l], true);
+  // rangka bambu: tulang tegak + busur
+  const ca = Math.cos(ang), sa = Math.sin(ang), P = (px, py) => ({ x: x + (px * ca - py * sa) * s, y: y + (px * sa + py * ca) * s });
+  g.lineStyle(1, INK, 0.7 * alpha); g.lineBetween(t.x, t.y, b.x, b.y);
+  const bow = []; for (let i = 0; i <= 6; i++) { const u = i / 6; bow.push(P(-18 + 36 * u, -6 - 8 * Math.sin(Math.PI * u))); }
+  g.strokePoints(bow, false);
+}
+function drawBird(g, b) {
+  const w = Math.sin(b.flap) * 8;
+  g.lineStyle(2.5, INK, 1);
+  g.beginPath(); g.moveTo(b.x - 13, b.y - w); g.lineTo(b.x - 4, b.y - 2); g.lineTo(b.x, b.y + 1); g.lineTo(b.x + 4, b.y - 2); g.lineTo(b.x + 13, b.y - w); g.strokePath();
+}
+function drawFlag(g, t, wind) {
+  // umbul-umbul: bambu tegak dan kain panjang yang berkibar ke arah angin
+  g.lineStyle(LINE, INK, 1); g.lineBetween(FLAG.x, FLAG.y, FLAG.x - 2, FLAG.y + 66);
+  const dir = wind >= 0 ? 1 : -1, len = 14 + Math.abs(wind) * 0.42, sp = 4 + Math.abs(wind) * 0.08;
+  const top = [], bot = [];
+  for (let i = 0; i <= 8; i++) { const u = i / 8, x = FLAG.x + dir * len * u, wv = Math.sin(t * sp - u * 5) * 3.5 * u;
+    top.push({ x, y: FLAG.y + 2 + wv + u * 3 }); bot.push({ x, y: FLAG.y + 14 - u * 7 + wv + u * 3 }); }
+  const poly = top.concat(bot.reverse());
+  g.fillStyle(BRICK, 1); g.fillPoints(poly, true); g.lineStyle(1.5, INK, 1); g.strokePoints(poly, true);
+}
+
+// latar kertas potong, digambar sekali
+function makeTextures(scene) {
+  if (scene.textures.exists('bg')) return;
+  const tex = scene.textures.createCanvas('bg', Math.round(W * DPR), Math.round(H * DPR)), c = tex.getContext();
+  c.scale(DPR, DPR);
+  let seed = 7; const r = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const jag = (pts, a = 1.2) => pts.map(([x, y]) => [x + (r() - 0.5) * a * 2, y + (r() - 0.5) * a * 2]);
+  const shape = (pts, fill, stroke = true) => { c.beginPath(); pts.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y)); c.closePath();
+    c.fillStyle = fill; c.fill(); if (stroke) { c.strokeStyle = CSS.ink; c.lineWidth = LINE; c.lineJoin = 'round'; c.stroke(); } };
+  // langit berpita datar
+  c.fillStyle = CSS.sky; c.fillRect(0, 0, W, H);
+  shape(jag([[-5, 300 + GY * 0.4], [140, 292 + GY * 0.4], [300, 304 + GY * 0.4], [455, 296 + GY * 0.4], [455, H], [-5, H]], 2), CSS.sky2, false);
+  shape(jag([[-5, 470 + GY * 0.8], [180, 462 + GY * 0.8], [455, 474 + GY * 0.8], [455, H], [-5, H]], 2), CSS.paper, false);
+  // matahari sore
+  const sy = 560 + GY, sun = []; for (let i = 0; i < 22; i++) { const a = i / 22 * Math.PI * 2; sun.push([310 + Math.cos(a) * 44, sy + Math.sin(a) * 44]); }
+  shape(jag(sun, 1), CSS.orange, false);
+  // awan potongan kertas
+  const cloud = (x, y, s) => { const p = [[0, 0], [10, -9], [26, -11], [36, -20], [54, -19], [64, -9], [82, -8], [92, 0]].map(([a, b]) => [x + a * s, y + b * s]);
+    shape(jag(p, 1.2), CSS.paper); };
+  cloud(24, 268 + GY * 0.2, 1.1); cloud(250, 140, 1); cloud(300, 330 + GY * 0.3, 1.2); cloud(70, 410 + GY * 0.5, 0.9);
+  // bukit jauh
+  shape(jag([[-5, 600 + GY], [60, 566 + GY], [120, 590 + GY], [200, 552 + GY], [290, 594 + GY], [370, 562 + GY], [455, 588 + GY], [455, 660 + GY], [-5, 660 + GY]], 1.5), CSS.sky2);
+  // kampung jauh: atap-atap kecil dan kubah masjid
+  const far = [];
+  far.push([-5, 650 + GY]);
+  for (let x = -5; x < 460; x += 28) { const h = 618 + GY + r() * 14; far.push([x, h + 8], [x + 14, h - 6], [x + 28, h + 8]); }
+  far.push([455, 670 + GY], [-5, 670 + GY]);
+  shape(jag(far, 0.8), CSS.sky);
+  const dome = []; for (let i = 0; i <= 12; i++) { const a = Math.PI + i / 12 * Math.PI; dome.push([96 + Math.cos(a) * 15, 612 + GY + Math.sin(a) * 15]); }
+  dome.push([111, 630 + GY], [81, 630 + GY]); shape(jag(dome, 0.6), CSS.sky);
+  shape(jag([[118, 632 + GY], [118, 588 + GY], [121, 580 + GY], [124, 588 + GY], [124, 632 + GY]], 0.4), CSS.sky);
+  // tiang dan kabel listrik
+  POLES.forEach(p => { shape([[p - 3, 596 + GY], [p + 3, 596 + GY], [p + 3, 760 + GY], [p - 3, 760 + GY]], CSS.ink, false);
+    shape([[p - 15, 602 + GY], [p + 15, 602 + GY], [p + 15, 605 + GY], [p - 15, 605 + GY]], CSS.ink, false); });
+  [0, 1].forEach(i => { c.strokeStyle = CSS.ink; c.lineWidth = LINE; c.beginPath(); for (let px = -5; px <= W + 5; px += 3) { const y = wireY(px, i); px <= -5 ? c.moveTo(px, y) : c.lineTo(px, y); } c.stroke(); });
+  // rumah depan: dinding kertas, genteng bata
+  const house = (x0, w, top) => {
+    top += GY;
+    shape(jag([[x0 + 6, top + 30], [x0 + w - 6, top + 30], [x0 + w - 6, H + 5], [x0 + 6, H + 5]], 1), CSS.paper);
+    shape(jag([[x0, top + 34], [x0 + w * 0.22, top], [x0 + w * 0.78, top], [x0 + w, top + 34]], 1), CSS.brick);
+    c.strokeStyle = CSS.ink; c.lineWidth = 1; for (let yy = top + 11; yy < top + 34; yy += 11) { const ins = (top + 34 - yy) / 34 * w * 0.22; c.beginPath(); c.moveTo(x0 + ins, yy); c.lineTo(x0 + w - ins, yy); c.stroke(); }
+    const win = (wx, wy) => { shape(jag([[wx, wy], [wx + 14, wy], [wx + 14, wy + 18], [wx, wy + 18]], 0.6), CSS.ink, false); c.fillStyle = CSS.orange; c.fillRect(wx + 3, wy + 3, 8, 12); };
+    win(x0 + w * 0.28, top + 52); win(x0 + w * 0.62, top + 52);
+  };
+  house(-30, 130, 700); house(90, 120, 712); house(285, 110, 714); house(360, 120, 702); house(170, 130, 690);
+  // anak-anak di atap (siluet tinta)
+  const kid = (x, y, flip) => {
+    y += GY; c.fillStyle = CSS.ink;
+    c.beginPath(); c.arc(x, y - 30, 6, 0, Math.PI * 2); c.fill();
+    c.fillRect(x - 5, y - 24, 10, 16); c.fillRect(x - 5, y - 8, 4, 12); c.fillRect(x + 1, y - 8, 4, 12);
+    c.save(); c.translate(x, y - 21); c.rotate(flip ? 0.9 : -0.9); c.fillRect(-2, -12, 4, 13); c.restore();
+    c.fillStyle = CSS.paper; c.beginPath(); c.arc(x + (flip ? -9 : 9), y - 10, 4, 0, Math.PI * 2); c.fill(); c.strokeStyle = CSS.ink; c.lineWidth = 1.5; c.stroke();
+  };
+  kid(222, 704, false); kid(30, 718, false); kid(420, 718, true);
+  tex.refresh();
+}
+
+// ---------- Kontrol layar ----------
+function tagButton(scene, x, y, w, h, label, cb, size = 30) {
+  // tombol seperti label kertas yang digunting
+  const g = scene.add.graphics();
+  const pts = d => [[-w / 2 + 2, -h / 2 + d], [w / 2 - 1, -h / 2 + 2 + d], [w / 2 + 1, h / 2 - 1 + d], [-w / 2, h / 2 + d]].map(([a, b]) => ({ x: x + a, y: y + b }));
+  const draw = down => { g.clear(); if (!down) { g.fillStyle(INK, 1); g.fillPoints(pts(4), true); }
+    g.fillStyle(BRICK, 1); g.fillPoints(pts(down ? 3 : 0), true); g.lineStyle(LINE, INK, 1); g.strokePoints(pts(down ? 3 : 0), true); };
+  draw(false);
+  const t = scene.add.text(x, y, label, { fontFamily: BODY, fontSize: size + 'px', color: CSS.paper, fontStyle: '800' }).setOrigin(0.5);
+  const z = scene.add.zone(x, y, w, h).setInteractive({ useHandCursor: true });
+  z.isButton = true;
+  z.on('pointerdown', () => { draw(true); t.y = y + 3; });
+  z.on('pointerout', () => { draw(false); t.y = y; });
+  z.on('pointerup', () => { draw(false); t.y = y; SFX.init(); SFX.tap(); cb(); });
+  return { g, t, z, all: [g, t, z] };
+}
+function iconButton(scene, x, y, kind, cb) {
+  const g = scene.add.graphics();
+  const draw = () => { g.clear(); g.fillStyle(PAPER, 0.9); g.fillCircle(x, y, 19); g.lineStyle(LINE, INK, 1); g.strokeCircle(x, y, 19); g.fillStyle(INK, 1);
+    if (kind === 'pause') { g.fillRect(x - 6, y - 7, 4, 14); g.fillRect(x + 2, y - 7, 4, 14); }
+    else { g.fillRect(x - 8, y - 4, 5, 8); g.fillTriangle(x - 4, y - 4, x + 3, y - 9, x + 3, y + 9); g.fillRect(x - 4, y - 4, 7, 8);
+      g.lineStyle(LINE, INK, 1);
+      if (SFX.muted) { g.lineBetween(x + 6, y - 5, x + 12, y + 5); g.lineBetween(x + 12, y - 5, x + 6, y + 5); }
+      else { g.beginPath(); g.arc(x + 4, y, 6, -0.8, 0.8); g.strokePath(); g.beginPath(); g.arc(x + 4, y, 10, -0.8, 0.8); g.strokePath(); } } };
+  draw();
+  const z = scene.add.zone(x, y, 56, 56).setInteractive({ useHandCursor: true });
+  z.isButton = true;
+  z.on('pointerup', () => { SFX.init(); cb(); draw(); });
+  return { g, z, draw };
+}
+
+// ---------- Menu ----------
+class Menu extends Phaser.Scene {
+  constructor() { super('menu'); }
+  create() {
+    makeTextures(this);
+    hdCamera(this); this.add.image(0, 0, 'bg').setOrigin(0).setScale(1 / DPR);
+    this.g = this.add.graphics();
+    this.t = 0;
+    // logotype berlapis seperti potongan kertas: bayangan tinta, isi kertas
+    const ly = 150 + GY * 0.3;
+    this.logoY = ly;
+    const mk = (txt, x, y, size, ang) => {
+      const st = { fontFamily: LOGO, fontSize: size + 'px', color: CSS.ink };
+      this.add.text(x + 4, y + 5, txt, st).setOrigin(0.5).setAngle(ang);
+      return this.add.text(x, y, txt, { ...st, color: CSS.paper, stroke: CSS.ink, strokeThickness: 5 }).setOrigin(0.5).setAngle(ang);
+    };
+    mk('adu', W / 2 - 92, ly - 52, 46, -6);
+    mk('layang', W / 2 + 6, ly + 6, 78, -4);
+    this.add.text(W / 2 + 70, ly + 74, 'sore di kampung', { fontFamily: BODY, fontSize: '15px', color: CSS.ink, fontStyle: '700' }).setOrigin(0.5).setAngle(-4);
+    const my = 470 + GY * 0.55;
+    this.add.text(W / 2, my, 'tahan untuk menarik benang, geser untuk mengarahkan.\nsilangkan benangmu ke benang lawan sambil menarik.', { fontFamily: BODY, fontSize: '15px', color: CSS.ink, fontStyle: '500', align: 'center', lineSpacing: 5 }).setOrigin(0.5);
+    this.mainBtn = tagButton(this, W / 2, my + 78, 190, 62, 'main', () => this.go(), 30);
+    const best = store.get('best', 0);
+    if (best) this.add.text(W / 2, my + 136, 'rekor ' + best, { fontFamily: BODY, fontSize: '16px', color: CSS.ink, fontStyle: '700' }).setOrigin(0.5);
+    this.mute = iconButton(this, W - 34, 32, 'mute', () => SFX.setMute(!SFX.muted));
+    this.input.keyboard.on('keydown-ENTER', () => this.go());
+    this.input.keyboard.on('keydown-SPACE', () => this.go());
+  }
+  go() { SFX.init(); this.scene.start('play'); }
+  update(_, dms) {
+    const dt = dms / 1000; this.t += dt;
+    const g = this.g; g.clear();
+    // layangan logo: terbang pelan di atas tulisan, benangnya turun ke anak di atap
+    const k = { x: W - 50 + Math.sin(this.t * 0.6) * 10, y: this.logoY - 58 + Math.sin(this.t * 0.9) * 8 };
+    g.lineStyle(1.6, BRICK, 1); g.strokePoints(stringPts(ANCHOR, k, 0.6, 30), false);
+    drawKite(g, k.x, k.y, Math.sin(this.t * 0.6) * 0.15 + 0.1, 1.5, BRICK, PAPER);
+    drawFlag(g, this.t, 40);
+  }
+}
+
+// ---------- Main ----------
+class Play extends Phaser.Scene {
+  constructor() { super('play'); }
+  create() {
+    hdCamera(this); this.add.image(0, 0, 'bg').setOrigin(0).setScale(1 / DPR);
+    this.g = this.add.graphics();
+    this.hud = this.add.graphics().setDepth(10);
+    const sy = 380 + GY * 0.4;
+    this.k = { x: 225, y: sy, vx: 0, vy: 0, ang: 0, hp: 1, alive: true, hold: false, holdT: 0 };
+    this.started = false; this.over = false; this.paused = false;
+    this.time0 = 0; this.score = 0; this.scoreAcc = 0; this.cuts = 0; this.combo = 0; this.lastCut = -99;
+    this.wind = rnd(-30, 30); this.windTarget = this.wind; this.windTimer = rnd(10, 15);
+    this.opps = []; this.oppTimer = 6; this.birds = []; this.birdTimer = 12; this.flecks = [];
+    this.crossing = false; this.losing = false; this.ignorePtr = false; this.cause = '';
+    this.best = store.get('best', 0);
+
+    this.scoreT = this.add.text(18, 14, '0', { fontFamily: BODY, fontSize: '30px', color: CSS.ink, fontStyle: '800' }).setDepth(11);
+    this.bestT = this.add.text(18, 50, this.best ? 'rekor ' + this.best : '', { fontFamily: BODY, fontSize: '13px', color: CSS.ink, fontStyle: '700' }).setDepth(11);
+    this.add.text(156, 71, 'benang', { fontFamily: BODY, fontSize: '13px', color: CSS.ink, fontStyle: '700' }).setDepth(11);
+    this.hint = this.add.text(W / 2, 470 + GY * 0.4, 'tahan untuk menarik', { fontFamily: BODY, fontSize: '20px', color: CSS.ink, fontStyle: '700' }).setOrigin(0.5).setDepth(11);
+    this.tweens.add({ targets: this.hint, alpha: 0.4, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
+
+    this.muteB = iconButton(this, W - 82, 32, 'mute', () => SFX.setMute(!SFX.muted));
+    this.pauseB = iconButton(this, W - 34, 32, 'pause', () => this.setPaused(!this.paused));
+    [this.muteB, this.pauseB].forEach(b => { b.g.setDepth(12); b.z.setDepth(12); });
+    this.pauseBg = this.add.rectangle(0, 0, W, H, SKY, 0.75).setOrigin(0).setDepth(19).setVisible(false);
+    this.pauseT = this.add.text(W / 2, H / 2 - 20, 'jeda', { fontFamily: LOGO, fontSize: '56px', color: CSS.paper, stroke: CSS.ink, strokeThickness: 5 }).setOrigin(0.5).setDepth(20).setVisible(false);
+    this.pauseT2 = this.add.text(W / 2, H / 2 + 40, 'ketuk untuk lanjut', { fontFamily: BODY, fontSize: '17px', color: CSS.ink, fontStyle: '700' }).setOrigin(0.5).setDepth(20).setVisible(false);
+
+    this.input.addPointer(1);
+    this.input.on('pointerdown', (p, over) => {
+      SFX.init();
+      this.ignorePtr = over.some(o => o.isButton);
+      if (this.paused && !this.ignorePtr) { this.setPaused(false); this.ignorePtr = true; }
+    });
+    this.input.on('pointerup', () => { this.ignorePtr = false; });
+    this.keys = this.input.keyboard.addKeys('SPACE,LEFT,RIGHT,A,D,P,M,ENTER');
+    this.input.keyboard.on('keydown-P', () => this.setPaused(!this.paused));
+    this.input.keyboard.on('keydown-M', () => { SFX.setMute(!SFX.muted); this.muteB.draw(); });
+    this.onHide = () => { if (document.hidden && this.started && !this.over) this.setPaused(true); };
+    document.addEventListener('visibilitychange', this.onHide);
+    this.events.once('shutdown', () => { document.removeEventListener('visibilitychange', this.onHide); SFX.level(SFX.rasp, 0); SFX.level(SFX.wind, 0); });
+    window.__play = this;
+  }
+  setPaused(v) {
+    if (this.over) return;
+    this.paused = v; [this.pauseT, this.pauseT2, this.pauseBg].forEach(o => o.setVisible(v));
+    if (v) { SFX.level(SFX.rasp, 0); SFX.level(SFX.wind, 0); }
+  }
+  readInput() {
+    const bot = window.__botInput;
+    if (bot) return { hold: bot.hold, tx: bot.x };
+    const kb = this.keys;
+    let hold = false, tx = this.k.x;
+    const ptrs = this.input.manager.pointers.filter(q => q.isDown);
+    if (ptrs.length && !this.ignorePtr) { hold = true; tx = ptrs[ptrs.length - 1].worldX; }
+    if (kb.SPACE.isDown) { hold = true; tx = this.k.x; }
+    if (kb.LEFT.isDown || kb.A.isDown) tx = this.k.x - 160;
+    if (kb.RIGHT.isDown || kb.D.isDown) tx = this.k.x + 160;
+    return { hold, tx };
+  }
+  update(_, dms) {
+    const dt = Math.min(dms, 50) / 1000;
+    if (this.paused) return;
+    const inp = this.readInput();
+    if (!this.started) {
+      if (inp.hold) { this.started = true; SFX.gong(); this.tweens.killTweensOf(this.hint); this.tweens.add({ targets: this.hint, alpha: 0, duration: 500 }); }
+      else { this.k.ang = Math.sin(this.time.now / 500) * 0.06; this.render(dt); return; }
+    }
+    this.time0 += dt;
+    this.stepWind(dt);
+    if (!this.over) this.stepPlayer(dt, inp); else this.stepLoose(this.k, dt);
+    this.stepOpps(dt);
+    this.stepBirds(dt);
+    if (!this.over) this.contest(dt, inp.hold);
+    for (const f of this.flecks) { f.x += f.vx * dt; f.y += f.vy * dt; f.vy += 160 * dt; f.life -= dt; }
+    this.flecks = this.flecks.filter(f => f.life > 0);
+    if (!this.over) {
+      this.scoreAcc += dt; if (this.scoreAcc >= 1) { this.scoreAcc -= 1; this.score += 1; }
+      this.scoreT.setText(this.score);
+    }
+    this.render(dt);
+  }
+  stepWind(dt) {
+    this.windTimer -= dt;
+    if (this.windTimer <= 0) {
+      this.windTimer = rnd(10, 15);
+      const maxW = this.time0 < 30 ? 55 : this.time0 < 75 ? 80 : 95;
+      let w; do { w = rnd(-maxW, maxW); } while (Math.abs(w - this.wind) < 30);
+      this.windTarget = w;
+      if (!this.over) SFX.windShift(Math.sign(w - this.wind));
+    }
+    this.wind += clamp(this.windTarget - this.wind, -30 * dt, 30 * dt);
+    if (!this.over) SFX.level(SFX.wind, 0.025 + Math.abs(this.wind) / 95 * 0.1);
+  }
+  stepPlayer(dt, inp) {
+    const k = this.k;
+    if (inp.hold) {
+      if (!k.hold) { k.holdT = 0; SFX.reel(); }
+      k.holdT += dt;
+      // tarikan: sentakan kuat di awal lalu tarikan tetap, seperti menarik benang sungguhan
+      k.vy -= (T.lift + T.tug * Math.exp(-k.holdT * T.tugDecay)) * dt;
+      const target = clamp((inp.tx - k.x) * T.steer, -T.steerMax, T.steerMax) + this.wind * T.windHold;
+      k.vx += (target - k.vx) * Math.min(1, 4 * dt);
+    } else {
+      k.vy += T.sink * dt;
+      if (k.vy < 0) k.vy *= Math.max(0, 1 - 3.5 * dt);
+      k.vx += (this.wind - k.vx) * Math.min(1, T.windSlack * dt);
+    }
+    if (Math.abs(this.wind) > 70) { k.vx += Math.sin(this.time.now / 170) * 180 * dt; k.vy += Math.sin(this.time.now / 230) * 120 * dt; }
+    k.vy = clamp(k.vy, -T.maxUp, T.maxDown);
+    k.x += k.vx * dt; k.y += k.vy * dt;
+    if (k.x < 18) { k.x = 18; k.vx = Math.max(0, k.vx); } if (k.x > W - 18) { k.x = W - 18; k.vx = Math.min(0, k.vx); }
+    if (k.y < TOP_Y) { k.y = TOP_Y; k.vy = Math.max(0, k.vy); }
+    k.hold = inp.hold;
+    // layangan menunduk ke arah gerak dan sedikit melawan angin
+    const lean = clamp(k.vx / 300, -0.55, 0.55) - (k.hold ? 0 : this.wind / 900);
+    k.ang += (lean - k.ang) * Math.min(1, 6 * dt);
+    if (k.y + 14 > wireY(k.x, 0)) {
+      this.fleck(k.x, wireY(k.x, 0), 6, ORANGE, 160);
+      this.lose('kabel', 'nyangkut di kabel listrik.');
+    }
+  }
+  stepLoose(k, dt) {
+    k.vx += (this.wind - k.vx) * Math.min(1, dt); k.vy += (55 - k.vy) * Math.min(1, dt);
+    k.x += k.vx * dt; k.y += k.vy * dt; k.ang += dt * 2.2;
+  }
+  fleck(x, y, n, c, sp = 80) { for (let i = 0; i < n; i++) this.flecks.push({ x, y, vx: rnd(-sp, sp), vy: rnd(-sp, sp * 0.3), life: rnd(0.3, 0.6), c }); }
+  lose(cause, text) {
+    if (this.over) return;
+    this.over = true; this.cause = cause; this.k.alive = false; this.losing = false;
+    SFX.level(SFX.rasp, 0); SFX.level(SFX.wind, 0.015); SFX.lose(); buzz([120, 60, 160]);
+    this.k.vx = this.wind; this.k.vy = -30;
+    const best = Math.max(this.best, this.score), isNew = this.score > this.best && this.score > 0;
+    store.set('best', best);
+    this.time.delayedCall(1400, () => this.showOver(text, best, isNew));
+  }
+  showOver(text, best, isNew) {
+    const items = [], top = H / 2 - 190;
+    items.push(this.add.rectangle(0, 0, W, H, SKY, 0.55).setOrigin(0));
+    // lembar kertas sedikit miring
+    const pg = this.add.graphics();
+    const sheet = [[44, top + 4], [W - 40, top], [W - 44, top + 372], [40, top + 378]].map(([x, y]) => ({ x, y }));
+    pg.fillStyle(INK, 1); pg.fillPoints(sheet.map(p => ({ x: p.x + 5, y: p.y + 6 })), true);
+    pg.fillStyle(PAPER, 1); pg.fillPoints(sheet, true); pg.lineStyle(LINE, INK, 1); pg.strokePoints(sheet, true); items.push(pg);
+    items.push(this.add.text(W / 2, top + 58, 'putus.', { fontFamily: LOGO, fontSize: '54px', color: CSS.brick }).setOrigin(0.5).setAngle(-3));
+    items.push(this.add.text(W / 2, top + 108, text, { fontFamily: BODY, fontSize: '16px', color: CSS.ink, fontStyle: '500' }).setOrigin(0.5));
+    items.push(this.add.text(W / 2, top + 170, String(this.score), { fontFamily: BODY, fontSize: '64px', color: CSS.ink, fontStyle: '800' }).setOrigin(0.5));
+    const line2 = Math.floor(this.time0) + ' detik di udara · ' + this.cuts + ' layangan diputus';
+    items.push(this.add.text(W / 2, top + 218, line2, { fontFamily: BODY, fontSize: '15px', color: CSS.ink, fontStyle: '500' }).setOrigin(0.5));
+    items.push(this.add.text(W / 2, top + 244, isNew ? 'rekor baru' : 'rekor ' + best, { fontFamily: BODY, fontSize: '15px', color: isNew ? CSS.brick : CSS.ink, fontStyle: '800' }).setOrigin(0.5));
+    const b = tagButton(this, W / 2, top + 304, 200, 58, 'main lagi', () => this.scene.restart(), 26); items.push(...b.all);
+    const m = this.add.text(W / 2, top + 350, 'menu', { fontFamily: BODY, fontSize: '15px', color: CSS.ink, fontStyle: '700' }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    m.isButton = true; m.on('pointerup', () => this.scene.start('menu')); items.push(m);
+    items.forEach(o => { o.setDepth(30 + (o.depth || 0)); if (o.setAlpha) { o.setAlpha(0); this.tweens.add({ targets: o, alpha: 1, duration: 300 }); } });
+    this.againBtn = b;
+    this.time.delayedCall(600, () => this.input.keyboard.once('keydown-ENTER', () => this.scene.restart()));
+  }
+  // ----- lawan -----
+  spawnOpp() {
+    const t = this.time0;
+    const type = t < 35 ? 'pelan' : t < 70 ? pick(['pelan', 'cepat']) : pick(['pelan', 'cepat', 'cepat', 'jagoan', 'jagoan']);
+    const used = this.opps.filter(o => o.state === 'fly').map(o => o.side);
+    let side = Math.random() < 0.5 ? 0 : 1; if (used.includes(side) && !used.includes(1 - side)) side = 1 - side;
+    const a = OPP_ANCHORS[side], sx = side ? W - 40 : 40;
+    this.opps.push({ type, cfg: TYPES[type], side, a, x: sx, y: LOW_Y + 20, vx: 0, vy: -120, ang: 0, hp: TYPES[type].hp, maxHp: TYPES[type].hp,
+      pulling: false, pullT: 0, tgt: null, tgtT: 0, state: 'fly', mode: 'wander', cross: false, losing: false });
+  }
+  stepOpps(dt) {
+    const alive = this.opps.filter(o => o.state === 'fly').length;
+    const max = this.time0 < 40 ? 1 : this.time0 < 90 ? 2 : 3;
+    if (!this.over && alive < max) { this.oppTimer -= dt; if (this.oppTimer <= 0) { this.spawnOpp(); this.oppTimer = rnd(3, 5); } }
+    for (const o of this.opps) {
+      if (o.state === 'cut') { this.stepLoose(o, dt); o.alpha = Math.max(0, (o.alpha ?? 1) - dt * 0.15); continue; }
+      const c = o.cfg;
+      o.tgtT -= dt;
+      if (!o.cross) o.hp = Math.min(o.maxHp, o.hp + T.oppRegen * dt);
+      if (o.losing && o.hp < 0.6 * o.maxHp && o.type === 'cepat' && o.mode !== 'flee') { o.mode = 'flee'; o.tgt = { x: o.side ? W - 50 : 50, y: clamp(o.y - 120, TOP_Y + 10, LOW_Y) }; o.tgtT = 1.6; }
+      if (!o.tgt || o.tgtT <= 0 || Math.hypot(o.tgt.x - o.x, o.tgt.y - o.y) < 25) {
+        const hunt = this.k.alive && (o.type === 'jagoan' || (o.type === 'cepat' && this.time0 > 60 && Math.random() < 0.35));
+        if (hunt) {
+          const p = stringPts(ANCHOR, this.k, 0.5, this.wind)[7];
+          o.mode = 'hunt'; o.tgt = { x: clamp(p.x + (o.side ? -70 : 70), 40, W - 40), y: clamp(Math.min(this.k.y, p.y) - 40, TOP_Y + 10, LOW_Y - 100) };
+          o.tgtT = rnd(0.8, 1.4);
+        } else { o.mode = 'wander'; o.tgt = { x: rnd(60, W - 60), y: rnd(TOP_Y + 20, LOW_Y - 100) }; o.tgtT = rnd(1.5, 3); }
+      }
+      o.pullT -= dt;
+      if (o.pullT <= 0) { o.pullT = 0.6; o.pulling = Math.random() < (o.cross ? c.pullCross : c.pull); }
+      const dx = o.tgt.x - o.x, dy = o.tgt.y - o.y, d = Math.hypot(dx, dy) || 1;
+      const sp = c.speed * (o.pulling ? 1.25 : 1) * (o.mode === 'flee' ? 1.3 : 1);
+      o.vx += ((dx / d) * sp + this.wind * 0.3 - o.vx) * Math.min(1, 2 * dt);
+      o.vy += ((dy / d) * sp - o.vy) * Math.min(1, 2 * dt);
+      o.x = clamp(o.x + o.vx * dt, 20, W - 20); o.y = clamp(o.y + o.vy * dt, TOP_Y, LOW_Y + 40);
+      o.ang += (clamp(o.vx / 300, -0.55, 0.55) - o.ang) * Math.min(1, 5 * dt);
+    }
+    this.opps = this.opps.filter(o => o.state === 'fly' || (o.y < H + 40 && o.x > -60 && o.x < W + 60 && o.alpha > 0));
+  }
+  contest(dt, hold) {
+    const k = this.k, mine = stringPts(ANCHOR, k, hold ? 0.15 : 0.7, this.wind);
+    let any = false, losing = false;
+    for (const o of this.opps) {
+      o.cross = false; o.losing = false;
+      if (o.state !== 'fly') continue;
+      const P = polyX(mine, stringPts(o.a, o, o.pulling ? 0.15 : 0.7, this.wind));
+      if (!P) continue;
+      o.cross = true; any = true;
+      const myP = (hold ? 1 : 0.25) + (k.y < o.y - 10 ? 0.6 : 0);
+      const opP = (o.pulling ? 1 : 0.25) * o.cfg.str + (o.y < k.y - 10 ? 0.6 : 0);
+      const win = myP >= opP;
+      if (win) { o.hp -= T.cutRate * dt; o.losing = true; } else { k.hp -= T.cutRate * dt; losing = true; }
+      if (Math.random() < 0.35) this.fleck(P.x, P.y, 1, win ? PAPER : BRICK, 50);
+      o.crossAt = P;
+      if (o.hp <= 0) this.cutOpp(o, P);
+    }
+    this.crossing = any; this.losing = losing;
+    if (losing) { this.buzzT = (this.buzzT || 0) - dt; if (this.buzzT <= 0) { this.buzzT = 0.3; buzz(18); } } else this.buzzT = 0;
+    SFX.level(SFX.rasp, any ? 0.12 : 0);
+    if (!any) k.hp = Math.min(1, k.hp + T.regen * dt);
+    if (k.hp <= 0) { k.hp = 0; this.lose('adu', 'kalah adu benang.'); }
+  }
+  cutOpp(o, P) {
+    o.state = 'cut'; o.vx = this.wind; o.vy = -20;
+    this.combo = this.time0 - this.lastCut < T.comboWin ? Math.min(3, this.combo + 1) : 1;
+    this.lastCut = this.time0; this.cuts++;
+    const pts = 100 * this.combo; this.score += pts;
+    SFX.cut(this.combo); buzz(this.combo > 1 ? [40, 50, 40] : 45);
+    this.fleck(P.x, P.y, 5, o.cfg.top, 90);
+    const t = this.add.text(clamp(P.x, 60, W - 60), P.y - 16, '+' + pts, { fontFamily: BODY, fontSize: '20px', color: CSS.ink, fontStyle: '800' }).setOrigin(0.5).setDepth(15);
+    this.tweens.add({ targets: t, y: P.y - 50, alpha: 0, duration: 1100, ease: 'Sine.out', onComplete: () => t.destroy() });
+  }
+  // ----- burung -----
+  stepBirds(dt) {
+    if (!this.over) {
+      this.birdTimer -= dt;
+      if (this.birdTimer <= 0) {
+        const t = this.time0;
+        this.birdTimer = Math.max(3, 7 - t / 25);
+        const n = t > 60 ? pick([1, 1, 2, 3]) : 1;
+        const dir = Math.random() < 0.5 ? 1 : -1, y = rnd(TOP_Y + 20, LOW_Y), sp = rnd(90, 150) + Math.min(60, t / 3);
+        for (let i = 0; i < n; i++) this.birds.push({ x: dir > 0 ? -30 - i * 34 : W + 30 + i * 34, y: y + (i ? (i % 2 ? 22 : -22) : 0), vx: sp * dir, warn: 1.2, flap: rnd(0, 6), chirped: false });
+      }
+    }
+    for (const b of this.birds) {
+      if (b.warn > 0) { b.warn -= dt; continue; }
+      b.x += b.vx * dt; b.flap += dt * 12; b.y += Math.sin(b.flap * 0.3) * 10 * dt;
+      if (!b.chirped && b.x > 0 && b.x < W) { b.chirped = true; SFX.bird(); }
+      if (!this.over && Math.hypot(b.x - this.k.x, b.y - this.k.y) < 22) this.lose('burung', 'ditabrak burung.');
+    }
+    this.birds = this.birds.filter(b => b.warn > 0 || (b.vx > 0 ? b.x < W + 60 : b.x > -60));
+  }
+  // ----- gambar -----
+  render() {
+    const g = this.g, k = this.k, now = this.time.now / 1000; g.clear();
+    drawFlag(g, now, this.wind);
+    for (const o of this.opps) {
+      const a = o.alpha ?? 1;
+      if (o.state === 'fly') { g.lineStyle(o.pulling ? 1.4 : 1, INK, o.cross ? 0.9 : 0.55); g.strokePoints(stringPts(o.a, o, o.pulling ? 0.15 : 0.7, this.wind), false); }
+      else { g.lineStyle(1, INK, 0.5 * a); g.lineBetween(o.x, o.y + 18, o.x - this.wind * 0.3, o.y + 60); }
+      drawKite(g, o.x, o.y, o.ang, 1, o.cfg.top, o.cfg.bot, a);
+    }
+    if (k.alive) {
+      // gelasan merah bata, memudar saat aus
+      const col = lerpColor(SKY2, BRICK, 0.25 + 0.75 * k.hp);
+      g.lineStyle(k.hold ? 2 : 1.6, col, 1); g.strokePoints(stringPts(ANCHOR, k, k.hold ? 0.15 : 0.7, this.wind), false);
+    } else { g.lineStyle(1.4, BRICK, 0.7); g.lineBetween(k.x, k.y + 20, k.x - this.wind * 0.3, k.y + 70); }
+    drawKite(g, k.x, k.y, k.ang, 1.15, BRICK, PAPER);
+    for (const b of this.birds) {
+      if (b.warn > 0) {
+        if (this.over) continue;
+        const x = b.vx > 0 ? 12 : W - 12, f = b.vx > 0 ? 1 : -1, a = 0.45 + 0.45 * Math.abs(Math.sin(b.warn * 6));
+        g.lineStyle(2.5, INK, a); g.beginPath(); g.moveTo(x - 4 * f, b.y - 8); g.lineTo(x + 4 * f, b.y); g.lineTo(x - 4 * f, b.y + 8); g.strokePath();
+        continue;
+      }
+      drawBird(g, b);
+    }
+    for (const f of this.flecks) { g.fillStyle(f.c, Math.min(1, f.life * 3)); g.fillRect(f.x - 1.5, f.y - 1.5, 3, 3); }
+    this.renderHud();
+  }
+  renderHud() {
+    const h = this.hud, k = this.k; h.clear();
+    // benang: garis tipis di bawah skor
+    // bar benang: potongan kertas bergaris tinta, isi gelasan merah bata; berkedip pelan kalau tinggal sedikit
+    const x = 18, y = 72, w = 130, hh = 12, low = k.hp < 0.35 && k.alive;
+    h.fillStyle(INK, 1); h.fillRect(x + 3, y + 3, w, hh);
+    h.fillStyle(PAPER, 1); h.fillRect(x, y, w, hh);
+    if (k.hp > 0.01) { h.fillStyle(BRICK, low ? 0.55 + 0.45 * Math.sin(this.time.now / 90) : 1); h.fillRect(x, y, w * k.hp, hh); }
+    h.lineStyle(LINE, INK, 1); h.strokeRect(x, y, w, hh);
+    for (let i = 1; i < 4; i++) { h.lineStyle(1, INK, 0.35); h.lineBetween(x + w * i / 4, y + 2, x + w * i / 4, y + hh - 2); }
+  }
+}
+
+const boot = () => { if (window.__g) return; window.__g = new Phaser.Game({
+  type: Phaser.AUTO, parent: 'game', width: Math.round(W * DPR), height: Math.round(H * DPR), backgroundColor: CSS.sky,
+  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+  input: { activePointers: 3 },
+  render: { antialias: true },
+  scene: [Menu, Play],
+}); };
+// tunggu huruf siap (maks 1,5 detik) supaya logo tidak tampil dengan huruf cadangan
+Promise.race([
+  document.fonts ? Promise.all([document.fonts.load('48px Shrikhand'), document.fonts.load('800 20px Karla'), document.fonts.load('500 20px Karla')]) : Promise.resolve(),
+  new Promise(r => setTimeout(r, 1500)),
+]).then(boot, boot);
+</script>
+</body>
+</html>
