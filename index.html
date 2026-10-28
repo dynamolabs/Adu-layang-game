@@ -15,6 +15,8 @@
   #game { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); box-sizing: border-box; }
   canvas { display: block; }
+  /* layar lebar (PC): kanvas di tengah dengan garis tinta di kiri-kanan */
+  @media (min-aspect-ratio: 3/4) { canvas { box-shadow: -2px 0 0 #1F4E5A, 2px 0 0 #1F4E5A; } }
 </style>
 </head>
 <body>
@@ -609,7 +611,7 @@ class Play extends Phaser.Scene {
 
 const boot = () => { if (window.__g) return; window.__g = new Phaser.Game({
   type: Phaser.AUTO, parent: 'game', width: Math.round(W * DPR), height: Math.round(H * DPR), backgroundColor: CSS.sky,
-  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.NO_CENTER }, // #game (flex) yang menengahkan; dua-duanya = kanvas bergeser
   input: { activePointers: 3 },
   render: { antialias: true },
   scene: [Menu, Play],
