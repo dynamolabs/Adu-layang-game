@@ -40,8 +40,14 @@ setInterval(() => {
   ty = Math.max(110, Math.min(520, ty)); tx = Math.max(30, Math.min(420, tx));
   let hold = k.y > ty || (k.y > ty - 30 && k.vy > 40);
   if (k.hold && k.holdT > 0.6) hold = false; // tarik-ulur: lepas sebentar setelah sentakan
-  if (p.crossing) hold = __botMode === 'smart' && !(k.hold && k.holdT > 0.5);
+  if (p.crossing) {
+    if (__botMode === 'smart') { // menyambar: sapu ke samping melintasi benang lawan
+      if (!window.__dir || k.x < 50 || k.x > 400) window.__dir = k.x < 225 ? 1 : -1;
+      tx = k.x + __dir * 240; hold = !(k.hold && k.holdT > 0.7);
+    } else hold = false;
+  } else window.__dir = 0;
   if (__botMode === 'still') hold = true, tx = k.x;
+  if (__botMode === 'spam') { window.__tick = (window.__tick || 0) + 1; hold = (__tick % 9) < 4; tx = k.x; }
   __botInput.hold = hold; __botInput.x = tx;
 }, 33);`;
 
@@ -86,13 +92,16 @@ setInterval(() => {
     await page.evaluate(() => { __play.birdTimer = 999; });
     let s; for (let i = 0; i < 45; i++) { await page.waitForTimeout(1000); s = await S(page); if (s.over) break; }
     ok('kalah adu memutus benang', s.over && s.cause === 'adu', JSON.stringify(s)); await page.context().close(); }
-  // 4b. Strategi curang: tahan terus tanpa bergerak, 3 kali. Harus kalah dan tidak bertahan lama.
-  { const runs = [];
+  // 4b. Strategi curang (tahan diam, tap-tap tanpa mengarahkan) vs bot aktif yang menyambar. 3 kali masing-masing.
+  for (const mode of ['still', 'spam', 'smart']) { const runs = [];
     for (let r = 0; r < 3; r++) { const { page } = await open(b, false); await startPlay(page);
-      await page.evaluate(() => { window.__botMode = 'still'; }); await page.addScriptTag({ content: BOT });
+      await page.evaluate(m => { window.__botMode = m; }, mode); await page.addScriptTag({ content: BOT });
       let s; for (let i = 0; i < 90; i++) { await page.waitForTimeout(1000); s = await S(page); if (s.over) break; }
       runs.push(s); await page.context().close(); }
-    ok('tahan diam terus selalu kalah', runs.every(s => s.over), runs.map(s => `${s.cause || 'hidup'} ${s.t}dtk skor ${s.score} putus ${s.cuts}`).join(' | ')); }
+    const info = runs.map(s => `${s.cause || 'hidup'} ${s.t}dtk skor ${s.score} putus ${s.cuts}`).join(' | ');
+    const cuts = runs.reduce((a, s) => a + s.cuts, 0);
+    if (mode === 'smart') ok('bot aktif (menyambar) bisa menang adu', cuts >= 4, 'total putus ' + cuts + ' · ' + info);
+    else ok('bot ' + (mode === 'still' ? 'tahan diam' : 'tap-tap') + ' selalu kalah, paling banyak 1 putus per main', runs.every(s => s.over) && cuts <= 3, 'total putus ' + cuts + ' · ' + info); }
   // 5. HP: sentuhan asli (CDP) + layout
   { const { page } = await open(b, true);
     await page.screenshot({ path: path.join(OUT, 'hp-menu.png') });

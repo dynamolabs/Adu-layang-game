@@ -113,3 +113,11 @@ Pilihan warna layangan, dua pemain, level, musik latar, pohon.
 - Kekuatan adu = kesegaran sentakan (turun cepat setelah 0,5 dtk menahan, minimal 0,25) + 0,45 kalau lebih tinggi + 0,3 kalau layangan sedang bergerak cepat (menyambar).
 - Lawan memburu pemain yang diam lebih dari 2 detik (setelah detik 15).
 - QA: bot "tahan diam" kalah 3 dari 3 (12–40 dtk); bot yang tarik-ulur tetap bisa memutus (8 putus dalam 63 dtk).
+
+## v1.5 — sambaran (2026-10-28, dinamo: "tap-tap terus menang")
+- Adu dihitung dari **sambaran**: kekuatan = kecepatan layangan yang tegak lurus benang lawan / 200 (gerak naik-turun dihitung 40%), maks 1,2.
+  Bonus sentakan segar (0,2) dan posisi lebih tinggi (0,2) hanya berlaku kalau kamu sedang menyapu (sapuan ≥ 0,15).
+  Kerusakan = 1,3 × (0,4 + selisih) per detik untuk yang kalah; selisih < 0,05 = imbang, belum ada yang putus.
+- **Tenaga sentak**: tiap sentakan memakai 0,4 tenaga, pulih 0,55/dtk saat benang diulur; kekuatan sentak = 0,35 + 0,65 × tenaga.
+- Lawan **menyambar** saat benang bersilang (Pelan 35%, Cepat 75%, Jagoan selalu): menyapu tegak lurus benangmu.
+- QA (3 main per bot): tahan diam kalah 3/3 (total 3 putus, skor ±140), tap-tap kalah 3/3 (total 1 putus), bot yang mengarahkan dan menyambar 15 putus, skor sampai 1591.
