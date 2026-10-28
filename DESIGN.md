@@ -105,3 +105,11 @@ Pilihan warna layangan, dua pemain, level, musik latar, pohon.
 8. Kata di layar sedikit dan bahasa sehari-hari, huruf kecil: "tahan untuk menarik", "putus.", "main lagi", "rekor".
 9. Judul pakai logotype Shrikhand (gaya cat papan warung) berlapis seperti potongan kertas, dengan layangan dan benang ikut jadi bagian logonya; teks lain Karla.
 10. Suara jarang dan bermakna: desau angin, "srek" gulungan saat mulai menarik, gesekan gelasan, nada bonang saat memutus atau saat angin berganti. Tidak ada musik loop.
+
+## v1.4 — tarik-ulur (2026-10-28, dinamo: "kalau ku hold terus udah menang")
+- Masalah: menahan terus membuat layangan naik ke atas dan selalu lebih tinggi + selalu "menarik", jadi selalu menang adu.
+- Tarikan sekarang **sentakan**: gaya naik 900 yang meluruh cepat (faktor 2,6/dtk) + tarikan tetap kecil 60. Menahan lebih dari 0,9 dtk menggulung benang:
+  layangan ditarik ke arah gulungan (ke bawah, ke kabel) sampai 150 px/dtk.
+- Kekuatan adu = kesegaran sentakan (turun cepat setelah 0,5 dtk menahan, minimal 0,25) + 0,45 kalau lebih tinggi + 0,3 kalau layangan sedang bergerak cepat (menyambar).
+- Lawan memburu pemain yang diam lebih dari 2 detik (setelah detik 15).
+- QA: bot "tahan diam" kalah 3 dari 3 (12–40 dtk); bot yang tarik-ulur tetap bisa memutus (8 putus dalam 63 dtk).

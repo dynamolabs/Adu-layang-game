@@ -39,8 +39,9 @@ setInterval(() => {
   }
   ty = Math.max(110, Math.min(520, ty)); tx = Math.max(30, Math.min(420, tx));
   let hold = k.y > ty || (k.y > ty - 30 && k.vy > 40);
-  if (p.crossing) hold = __botMode === 'smart';
-  if (k.y > 540) hold = true;
+  if (k.hold && k.holdT > 0.6) hold = false; // tarik-ulur: lepas sebentar setelah sentakan
+  if (p.crossing) hold = __botMode === 'smart' && !(k.hold && k.holdT > 0.5);
+  if (__botMode === 'still') hold = true, tx = k.x;
   __botInput.hold = hold; __botInput.x = tx;
 }, 33);`;
 
@@ -85,6 +86,13 @@ setInterval(() => {
     await page.evaluate(() => { __play.birdTimer = 999; });
     let s; for (let i = 0; i < 45; i++) { await page.waitForTimeout(1000); s = await S(page); if (s.over) break; }
     ok('kalah adu memutus benang', s.over && s.cause === 'adu', JSON.stringify(s)); await page.context().close(); }
+  // 4b. Strategi curang: tahan terus tanpa bergerak, 3 kali. Harus kalah dan tidak bertahan lama.
+  { const runs = [];
+    for (let r = 0; r < 3; r++) { const { page } = await open(b, false); await startPlay(page);
+      await page.evaluate(() => { window.__botMode = 'still'; }); await page.addScriptTag({ content: BOT });
+      let s; for (let i = 0; i < 90; i++) { await page.waitForTimeout(1000); s = await S(page); if (s.over) break; }
+      runs.push(s); await page.context().close(); }
+    ok('tahan diam terus selalu kalah', runs.every(s => s.over), runs.map(s => `${s.cause || 'hidup'} ${s.t}dtk skor ${s.score} putus ${s.cuts}`).join(' | ')); }
   // 5. HP: sentuhan asli (CDP) + layout
   { const { page } = await open(b, true);
     await page.screenshot({ path: path.join(OUT, 'hp-menu.png') });

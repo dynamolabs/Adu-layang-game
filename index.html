@@ -54,7 +54,7 @@ const LOW_Y = 540 + GY;
 const FLAG = { x: 268, y: 628 + GY }; // ujung bambu umbul-umbul di atap pemain
 
 const T = { // angka keseimbangan, lihat DESIGN.md
-  lift: 390, tug: 520, tugDecay: 4, sink: 180, maxUp: 280, maxDown: 115, steer: 3.2, steerMax: 260, windHold: 0.35, windSlack: 1.6,
+  tug: 900, tugDecay: 2.6, hold: 60, reelIn: 150, reelAfter: 0.9, sink: 180, maxUp: 280, maxDown: 115, steer: 3.2, steerMax: 260, windHold: 0.35, windSlack: 1.6,
   cutRate: 1.3, regen: 0.12, oppRegen: 0.1, comboWin: 8,
 };
 const TYPES = {
@@ -298,7 +298,7 @@ class Menu extends Phaser.Scene {
     mk('layang', W / 2 + 6, ly + 6, 78, -4);
     this.add.text(W / 2 + 70, ly + 74, 'sore di kampung', { fontFamily: BODY, fontSize: '15px', color: CSS.ink, fontStyle: '700' }).setOrigin(0.5).setAngle(-4);
     const my = 470 + GY * 0.55;
-    this.add.text(W / 2, my, 'tahan untuk menarik benang, geser untuk mengarahkan.\nsilangkan benangmu ke benang lawan sambil menarik.', { fontFamily: BODY, fontSize: '15px', color: CSS.ink, fontStyle: '500', align: 'center', lineSpacing: 5 }).setOrigin(0.5);
+    this.add.text(W / 2, my, 'tarik-ulur: sentak sebentar untuk naik, lepas untuk mengulur.\nkelamaan menahan, benang tergulung dan layangan turun.\nsilangkan benang lawan sambil menyentak.', { fontFamily: BODY, fontSize: '15px', color: CSS.ink, fontStyle: '500', align: 'center', lineSpacing: 5 }).setOrigin(0.5);
     this.mainBtn = tagButton(this, W / 2, my + 78, 190, 62, 'main', () => this.go(), 30);
     const best = store.get('best', 0);
     if (best) this.add.text(W / 2, my + 136, 'rekor ' + best, { fontFamily: BODY, fontSize: '16px', color: CSS.ink, fontStyle: '700' }).setOrigin(0.5);
@@ -337,7 +337,7 @@ class Play extends Phaser.Scene {
     this.scoreT = this.add.text(18, 14, '0', { fontFamily: BODY, fontSize: '30px', color: CSS.ink, fontStyle: '800' }).setDepth(11);
     this.bestT = this.add.text(18, 50, this.best ? 'rekor ' + this.best : '', { fontFamily: BODY, fontSize: '13px', color: CSS.ink, fontStyle: '700' }).setDepth(11);
     this.add.text(156, 71, 'benang', { fontFamily: BODY, fontSize: '13px', color: CSS.ink, fontStyle: '700' }).setDepth(11);
-    this.hint = this.add.text(W / 2, 470 + GY * 0.4, 'tahan untuk menarik', { fontFamily: BODY, fontSize: '20px', color: CSS.ink, fontStyle: '700' }).setOrigin(0.5).setDepth(11);
+    this.hint = this.add.text(W / 2, 470 + GY * 0.4, 'sentak-sentak untuk menarik', { fontFamily: BODY, fontSize: '20px', color: CSS.ink, fontStyle: '700' }).setOrigin(0.5).setDepth(11);
     this.tweens.add({ targets: this.hint, alpha: 0.4, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
 
     this.muteB = iconButton(this, W - 82, 32, 'mute', () => SFX.setMute(!SFX.muted));
@@ -418,10 +418,14 @@ class Play extends Phaser.Scene {
     if (inp.hold) {
       if (!k.hold) { k.holdT = 0; SFX.reel(); }
       k.holdT += dt;
-      // tarikan: sentakan kuat di awal lalu tarikan tetap, seperti menarik benang sungguhan
-      k.vy -= (T.lift + T.tug * Math.exp(-k.holdT * T.tugDecay)) * dt;
-      const target = clamp((inp.tx - k.x) * T.steer, -T.steerMax, T.steerMax) + this.wind * T.windHold;
-      k.vx += (target - k.vx) * Math.min(1, 4 * dt);
+      // tarik-ulur: sentakan kuat di awal, lalu melemah. Menahan terlalu lama = benang tergulung,
+      // layangan tertarik turun ke arahmu (ke kabel). Jadi harus sentak, lepas (ulur), sentak lagi.
+      k.vy -= (T.hold + T.tug * Math.exp(-k.holdT * T.tugDecay)) * dt;
+      const steer = clamp((inp.tx - k.x) * T.steer, -T.steerMax, T.steerMax) + this.wind * T.windHold;
+      k.vx += (steer - k.vx) * Math.min(1, 4 * dt);
+      const over = clamp(k.holdT - T.reelAfter, 0, 1.5);
+      if (over > 0) { const dx = ANCHOR.x - k.x, dy = ANCHOR.y - k.y, d = Math.hypot(dx, dy) || 1;
+        k.x += dx / d * T.reelIn * over * dt; k.y += dy / d * T.reelIn * over * dt; }
     } else {
       k.vy += T.sink * dt;
       if (k.vy < 0) k.vy *= Math.max(0, 1 - 3.5 * dt);
@@ -433,6 +437,7 @@ class Play extends Phaser.Scene {
     if (k.x < 18) { k.x = 18; k.vx = Math.max(0, k.vx); } if (k.x > W - 18) { k.x = W - 18; k.vx = Math.min(0, k.vx); }
     if (k.y < TOP_Y) { k.y = TOP_Y; k.vy = Math.max(0, k.vy); }
     k.hold = inp.hold;
+    this.idleT = Math.hypot(k.vx, k.vy) < 45 ? (this.idleT || 0) + dt : 0;
     // layangan menunduk ke arah gerak dan sedikit melawan angin
     const lean = clamp(k.vx / 300, -0.55, 0.55) - (k.hold ? 0 : this.wind / 900);
     k.ang += (lean - k.ang) * Math.min(1, 6 * dt);
@@ -497,7 +502,7 @@ class Play extends Phaser.Scene {
       if (!o.cross) o.hp = Math.min(o.maxHp, o.hp + T.oppRegen * dt);
       if (o.losing && o.hp < 0.6 * o.maxHp && o.type === 'cepat' && o.mode !== 'flee') { o.mode = 'flee'; o.tgt = { x: o.side ? W - 50 : 50, y: clamp(o.y - 120, TOP_Y + 10, LOW_Y) }; o.tgtT = 1.6; }
       if (!o.tgt || o.tgtT <= 0 || Math.hypot(o.tgt.x - o.x, o.tgt.y - o.y) < 25) {
-        const hunt = this.k.alive && (o.type === 'jagoan' || (o.type === 'cepat' && this.time0 > 60 && Math.random() < 0.35));
+        const hunt = this.k.alive && (o.type === 'jagoan' || (this.idleT > 2 && this.time0 > 15) || (o.type === 'cepat' && this.time0 > 60 && Math.random() < 0.35));
         if (hunt) {
           const p = stringPts(ANCHOR, this.k, 0.5, this.wind)[7];
           o.mode = 'hunt'; o.tgt = { x: clamp(p.x + (o.side ? -70 : 70), 40, W - 40), y: clamp(Math.min(this.k.y, p.y) - 40, TOP_Y + 10, LOW_Y - 100) };
@@ -524,8 +529,9 @@ class Play extends Phaser.Scene {
       const P = polyX(mine, stringPts(o.a, o, o.pulling ? 0.15 : 0.7, this.wind));
       if (!P) continue;
       o.cross = true; any = true;
-      const myP = (hold ? 1 : 0.25) + (k.y < o.y - 10 ? 0.6 : 0);
-      const opP = (o.pulling ? 1 : 0.25) * o.cfg.str + (o.y < k.y - 10 ? 0.6 : 0);
+      // kekuatan dari sentakan yang masih segar, bukan dari menahan lama; layangan yang bergerak menyambar lebih kuat
+      const myP = (hold ? Math.max(0.25, Math.exp(-Math.max(0, k.holdT - 0.5) * 1.4)) : 0.25) + (k.y < o.y - 10 ? 0.45 : 0) + (Math.hypot(k.vx, k.vy) > 90 ? 0.3 : 0);
+      const opP = (o.pulling ? 1 : 0.25) * o.cfg.str + (o.y < k.y - 10 ? 0.45 : 0);
       const win = myP >= opP;
       if (win) { o.hp -= T.cutRate * dt; o.losing = true; } else { k.hp -= T.cutRate * dt; losing = true; }
       if (Math.random() < 0.35) this.fleck(P.x, P.y, 1, win ? PAPER : BRICK, 50);
