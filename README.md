@@ -1,5 +1,7 @@
 # Adu Layang
 
+**Play: https://adu-layang-game.vercel.app**
+
 *Adu Layang* ("kite fight") is a one-finger kite-fighting game for the browser, made for phones first. Fly your red-and-white kite from a rooftop in the evening sky, dodge the power lines and birds, and cut your neighbours' kite strings. The in-game text is in Indonesian.
 
 <img src="assets/menu.png" alt="Adu Layang menu screen" width="300">
