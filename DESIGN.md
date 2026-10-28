@@ -121,3 +121,8 @@ Pilihan warna layangan, dua pemain, level, musik latar, pohon.
 - **Tenaga sentak**: tiap sentakan memakai 0,4 tenaga, pulih 0,55/dtk saat benang diulur; kekuatan sentak = 0,35 + 0,65 × tenaga.
 - Lawan **menyambar** saat benang bersilang (Pelan 35%, Cepat 75%, Jagoan selalu): menyapu tegak lurus benangmu.
 - QA (3 main per bot): tahan diam kalah 3/3 (total 3 putus, skor ±140), tap-tap kalah 3/3 (total 1 putus), bot yang mengarahkan dan menyambar 15 putus, skor sampai 1591.
+
+## v1.6 bagikan skor (2026-10-28)
+- Layar "putus." punya tautan kecil **bagikan skor** di samping "menu" (bukan tombol besar, tidak ada pop-up).
+- Kartu 1080×1350 (4:5, pas untuk X/IG) digambar di canvas: latar kampung dari game, lembar kertas miring + bayangan tinta, logo Shrikhand, skor besar, "N layangan diputus · T detik di udara", "rekor baru" bila ada, "bisa kalahkan? adu-layang-game.vercel.app", layangan bata-kertas di pojok.
+- HP: `navigator.share` dengan file PNG + teks tautan. PC / browser tanpa share: PNG diunduh, label berubah jadi "gambar diunduh".

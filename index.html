@@ -476,7 +476,11 @@ class Play extends Phaser.Scene {
     items.push(this.add.text(W / 2, top + 218, line2, { fontFamily: BODY, fontSize: '15px', color: CSS.ink, fontStyle: '500' }).setOrigin(0.5));
     items.push(this.add.text(W / 2, top + 244, isNew ? 'rekor baru' : 'rekor ' + best, { fontFamily: BODY, fontSize: '15px', color: isNew ? CSS.brick : CSS.ink, fontStyle: '800' }).setOrigin(0.5));
     const b = tagButton(this, W / 2, top + 304, 200, 58, 'main lagi', () => this.scene.restart(), 26); items.push(...b.all);
-    const m = this.add.text(W / 2, top + 350, 'menu', { fontFamily: BODY, fontSize: '15px', color: CSS.ink, fontStyle: '700' }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    // bagikan skor: kartu gambar gaya kertas potong, dibagikan lewat menu share HP (atau diunduh di PC)
+    const card = makeScoreCard(this, this.score, this.cuts, Math.floor(this.time0), isNew);
+    const sh = this.add.text(W / 2 - 64, top + 350, 'bagikan skor', { fontFamily: BODY, fontSize: '15px', color: CSS.brick, fontStyle: '800' }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    sh.isButton = true; sh.on('pointerup', () => { SFX.init(); SFX.tap(); shareCard(card, this.score, sh); }); items.push(sh);
+    const m = this.add.text(W / 2 + 74, top + 350, 'menu', { fontFamily: BODY, fontSize: '15px', color: CSS.ink, fontStyle: '700' }).setOrigin(0.5).setInteractive({ useHandCursor: true });
     m.isButton = true; m.on('pointerup', () => this.scene.start('menu')); items.push(m);
     items.forEach(o => { o.setDepth(30 + (o.depth || 0)); if (o.setAlpha) { o.setAlpha(0); this.tweens.add({ targets: o, alpha: 1, duration: 300 }); } });
     this.againBtn = b;
@@ -624,6 +628,54 @@ class Play extends Phaser.Scene {
     h.lineStyle(LINE, INK, 1); h.strokeRect(x, y, w, hh);
     for (let i = 1; i < 4; i++) { h.lineStyle(1, INK, 0.35); h.lineBetween(x + w * i / 4, y + 2, x + w * i / 4, y + hh - 2); }
   }
+}
+
+// ---------- Kartu skor untuk dibagikan ----------
+const PLAY_URL = 'adu-layang-game.vercel.app';
+function makeScoreCard(scene, score, cuts, secs, isNew) {
+  const CW = 1080, CH = 1350, c = document.createElement('canvas'); c.width = CW; c.height = CH;
+  const x = c.getContext('2d');
+  // latar: potongan pemandangan game, dirapatkan ke bawah supaya atap kampung terlihat
+  const bg = scene.textures.get('bg').getSourceImage(), sc = CW / bg.width;
+  x.fillStyle = CSS.sky; x.fillRect(0, 0, CW, CH);
+  x.drawImage(bg, 0, CH - bg.height * sc, CW, bg.height * sc);
+  const kx = CW - 190, ky = 120, k = KITE.map(([a, b]) => [kx + a * 4.2, ky + b * 4.2]);
+  x.strokeStyle = CSS.brick; x.lineWidth = 5; x.beginPath(); x.moveTo(k[2][0], k[2][1]); x.quadraticCurveTo(kx + 60, 600, CW - 60, CH); x.stroke();
+  // lembar kertas miring dengan bayangan tinta
+  const sheet = [[120, 150], [CW - 110, 130], [CW - 125, 900], [105, 920]];
+  const path = (pts, dx = 0, dy = 0) => { x.beginPath(); pts.forEach(([a, b], i) => i ? x.lineTo(a + dx, b + dy) : x.moveTo(a + dx, b + dy)); x.closePath(); };
+  path(sheet, 14, 16); x.fillStyle = CSS.ink; x.fill();
+  path(sheet); x.fillStyle = CSS.paper; x.fill(); x.lineWidth = 5; x.strokeStyle = CSS.ink; x.lineJoin = 'round'; x.stroke();
+  x.save(); x.translate(CW / 2, 300); x.rotate(-0.06);
+  x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.font = '110px ' + LOGO; x.lineWidth = 12; x.strokeStyle = CSS.ink; x.fillStyle = CSS.ink; x.fillText('adu layang', 8, 10);
+  x.strokeText('adu layang', 0, 0); x.fillStyle = CSS.paper; x.fillText('adu layang', 0, 0);
+  x.restore();
+  x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillStyle = CSS.ink;
+  x.font = '800 210px ' + BODY; x.fillText(String(score), CW / 2, 530);
+  x.font = '500 44px ' + BODY; x.fillText(cuts + ' layangan diputus · ' + secs + ' detik di udara', CW / 2, 680);
+  if (isNew) { x.font = '800 44px ' + BODY; x.fillStyle = CSS.brick; x.fillText('rekor baru', CW / 2, 750); }
+  x.font = '500 36px ' + BODY; x.fillStyle = CSS.ink; x.fillText('bisa kalahkan?', CW / 2, 812);
+  x.font = '800 40px ' + BODY; x.fillText(PLAY_URL, CW / 2, 862);
+  // layangan bata-kertas di pojok (benangnya sudah digambar di balik lembar)
+  x.fillStyle = CSS.brick; x.beginPath(); x.moveTo(...k[0]); x.lineTo(...k[1]); x.lineTo(...k[3]); x.closePath(); x.fill();
+  x.fillStyle = CSS.paper; x.beginPath(); x.moveTo(...k[3]); x.lineTo(...k[1]); x.lineTo(...k[2]); x.closePath(); x.fill();
+  path(k); x.strokeStyle = CSS.ink; x.lineWidth = 6; x.stroke();
+  return c;
+}
+function shareCard(canvas, score, label) {
+  const text = 'Skorku ' + score + ' di Adu Layang. Bisa kalahkan? https://' + PLAY_URL;
+  canvas.toBlob(async blob => {
+    if (!blob) return;
+    const file = new File([blob], 'adu-layang-skor.png', { type: 'image/png' });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text }); return; }
+    } catch (e) { if (e && e.name === 'AbortError') return; }
+    // PC atau browser tanpa share: unduh gambarnya
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = file.name;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    label.setText('gambar diunduh');
+  }, 'image/png');
 }
 
 const boot = () => { if (window.__g) return; window.__g = new Phaser.Game({
